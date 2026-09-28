@@ -109,14 +109,34 @@ npm run format:check # Prettier (CI check)
 npx tsc --noEmit     # Type-check without emitting
 ```
 
+### Lighthouse reports
+
+`lighthouserc.js` + `.github/workflows/lighthouse.yml` audit all four tab routes
+on every PR and post a browsable per-route report as a workflow artifact, with
+deltas against the merge base. Locally, against a running dev server:
+
+```bash
+npx @lhci/cli@0.14.0 autorun --config=lighthouserc.js
+node scripts/lighthouse-report.mjs .lighthouseci/manifest.json "" .lighthouseci/report
+```
+
 ---
 
 ## Adding a new tab
 
 1. Create `components/<name>/<Name>Tab.tsx` and export a `<NameTab />` component.
-2. Add the tab key to the `TABS` array in `components/Shell.tsx`.
+2. Add the tab key to the `TABS` array in `lib/tabs.ts`.
 3. Add a matching `{tab === "<name>" && <NameTab />}` render block in `Shell.tsx`.
 4. Wrap it in `<TabErrorBoundary>` like the existing tabs.
+
+`lib/tabs.ts` is the single source of truth: the `/[tab]` route segment
+prerenders one static page per entry, and `lighthouserc.js` audits the same
+list. `lib/tabs.test.ts` fails CI if the two ever disagree, so a new tab cannot
+ship without being added to the Lighthouse route list.
+
+Each tab is a real URL — `/dashboard`, `/transactions`, `/admin`, `/docs` — so it
+can be linked, bookmarked, and restored on reload. `/` stays canonical for the
+dashboard.
 
 ---
 

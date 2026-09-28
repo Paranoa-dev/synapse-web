@@ -1,5 +1,6 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useRef, useCallback } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { DashboardTab } from "./dashboard/DashboardTab";
 import { TransactionsTab } from "./transactions/TransactionsTab";
 import { AdminTab } from "./admin/AdminTab";
@@ -10,16 +11,33 @@ import { useSorobanStatus } from "@/lib/soroban/useSorobanStatus";
 import { useWallet } from "@/lib/wallet/WalletProvider";
 import { useToast } from "@/components/ui/Toast";
 import { shortId } from "@/lib/utils";
-
-type Tab = "dashboard" | "transactions" | "admin" | "docs";
-const TABS: Tab[] = ["dashboard", "transactions", "admin", "docs"];
+import { DEFAULT_TAB, TABS, tabFromPathname, tabPath, type Tab } from "@/lib/tabs";
 
 export function Shell() {
-  const [tab, setTab] = useState<Tab>("dashboard");
+  const pathname = usePathname();
+  const router = useRouter();
+
+  // The selected tab is the URL, not React state. Each tab is a separately
+  // prerendered route segment (`app/[tab]/page.tsx`), so deriving from
+  // `pathname` gets three things for free that a `useState` copy did not:
+  // back/forward navigation works without a sync effect, a reload restores the
+  // tab, and the server and client renders always agree because both read the
+  // same pathname. An unrecognised segment falls back to the dashboard.
+  const tab = tabFromPathname(pathname);
+
   const { status: rpcStatus, lastEventAge, health: rpcHealth } = useSorobanStatus();
   const { address, connecting, error, connect, disconnect } = useWallet();
   const connected = address !== null;
   const { toast } = useToast();
+
+  // `/` stays canonical for the dashboard so the root URL does not turn into
+  // `/dashboard`, which would make the shareable link uglier for no gain.
+  const selectTab = useCallback(
+    (next: Tab) => {
+      router.push(next === DEFAULT_TAB ? "/" : tabPath(next));
+    },
+    [router]
+  );
 
   useEffect(() => {
     if (error) toast(error, "error");
@@ -116,7 +134,7 @@ export function Shell() {
             key={t}
             role="tab"
             aria-selected={tab === t}
-            onClick={() => setTab(t)}
+            onClick={() => selectTab(t)}
             style={{
               padding: "12px 22px",
               background: "none",

@@ -10,6 +10,8 @@ import { useSorobanStatus } from "@/lib/soroban/useSorobanStatus";
 import { useWallet } from "@/lib/wallet/WalletProvider";
 import { useToast } from "@/components/ui/Toast";
 import { shortId } from "@/lib/utils";
+import { resolveActiveTab, visibleTabs, type FlagKey } from "@/lib/flags/definitions";
+import { useFlag, useFlags } from "@/lib/flags/FlagProvider";
 
 type Tab = "dashboard" | "transactions" | "admin" | "docs";
 const TABS: Tab[] = ["dashboard", "transactions", "admin", "docs"];
@@ -18,6 +20,28 @@ export function Shell() {
   const [tab, setTab] = useState<Tab>("dashboard");
   const { status: rpcStatus, lastEventAge, health: rpcHealth } = useSorobanStatus();
   const { address, connecting, error, connect, disconnect } = useWallet();
+
+  // Feature flags. `isEnabled` is read during the first render, before the
+  // remote config has arrived, so it resolves to the registry default — which
+  // is the safe direction and identical on server and client, so there is no
+  // hydration mismatch. The remote config lands in an effect one tick later.
+  const {
+    status: flagStatus,
+    source: flagSource,
+    stale: flagStale,
+    lastError: flagError,
+  } = useFlags();
+  const adminEnabled = useFlag("tab.admin");
+  const docsEnabled = useFlag("tab.docs");
+  const isFlagEnabled = (key: FlagKey) =>
+    key === "tab.admin" ? adminEnabled : key === "tab.docs" ? docsEnabled : true;
+
+  // A tab can be switched off remotely *while it is open*, so the active tab is
+  // re-validated against the visible set on every render rather than only on
+  // click. Without this, disabling `tab.admin` from the flag console would
+  // blank the content area for anyone currently looking at it.
+  const shownTabs = visibleTabs(TABS, isFlagEnabled);
+  const activeTab = resolveActiveTab(TABS, tab, isFlagEnabled);
   const connected = address !== null;
   const { toast } = useToast();
 
@@ -111,11 +135,11 @@ export function Shell() {
 
       {/* ── Tab Bar ── */}
       <nav className="shell-nav" role="tablist" aria-label="Sections">
-        {TABS.map((t) => (
+        {shownTabs.map((t) => (
           <button
             key={t}
             role="tab"
-            aria-selected={tab === t}
+            aria-selected={activeTab === t}
             onClick={() => setTab(t)}
             style={{
               padding: "12px 22px",
@@ -125,13 +149,13 @@ export function Shell() {
               fontFamily: MONO,
               fontSize: 11,
               letterSpacing: "0.1em",
-              color: tab === t ? "#fff" : DIM,
-              borderBottom: tab === t ? `2px solid ${AMBER}` : "2px solid transparent",
+              color: activeTab === t ? "#fff" : DIM,
+              borderBottom: activeTab === t ? `2px solid ${AMBER}` : "2px solid transparent",
               marginBottom: -1,
               transition: "color 0.15s",
             }}
             onMouseEnter={(e) => {
-              if (tab !== t) e.currentTarget.style.color = "rgba(255,255,255,0.65)";
+              if (activeTab !== t) e.currentTarget.style.color = "rgba(255,255,255,0.65)";
             }}
             onMouseLeave={(e) => {
               if (tab !== t) e.currentTarget.style.color = DIM;
@@ -144,22 +168,22 @@ export function Shell() {
 
       {/* ── Body ── */}
       <main className="shell-main">
-        {tab === "dashboard" && (
+        {activeTab === "dashboard" && (
           <TabErrorBoundary title="Dashboard tab error">
             <DashboardTab />
           </TabErrorBoundary>
         )}
-        {tab === "transactions" && (
+        {activeTab === "transactions" && (
           <TabErrorBoundary title="Transactions tab error">
             <TransactionsTab />
           </TabErrorBoundary>
         )}
-        {tab === "admin" && (
+        {adminEnabled && activeTab === "admin" && (
           <TabErrorBoundary title="Admin tab error">
             <AdminTab />
           </TabErrorBoundary>
         )}
-        {tab === "docs" && (
+        {docsEnabled && activeTab === "docs" && (
           <TabErrorBoundary title="Docs tab error">
             <DocsTab />
           </TabErrorBoundary>
@@ -178,6 +202,21 @@ export function Shell() {
       >
         <span style={{ fontSize: 9, color: DIM, letterSpacing: "0.1em" }}>
           SYNAPSE CORE · v0.1.0 · TESTNET
+        </span>
+        <span style={{ fontSize: 9, letterSpacing: "0.1em" }}>
+          {/*
+            Flag source indicator. Normally invisible-ish; it only draws
+            attention when the flag config could not be loaded and the app is
+            running on registry defaults, which is the one flag state worth
+            noticing at a glance.
+          */}
+          {flagStatus === "loading"
+            ? "FLAGS: loading"
+            : flagSource === "remote"
+              ? ""
+              : `FLAGS: ${flagSource === "cache" ? "cached" : "defaults"}${flagStale ? " (stale)" : ""}${
+                  flagError ? ` · ${flagError}` : ""
+                }`}
         </span>
         <span
           style={{

@@ -17,7 +17,10 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # `.nvmrc` is the single source of truth for the Node version, shared
+          # with local native setups and Dockerfile.dev. A hardcoded version here
+          # is how the container and CI drift apart.
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Install dependencies

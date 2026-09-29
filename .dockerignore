@@ -1,0 +1,36 @@
+# Keep the build context small and the dependency layer cacheable.
+#
+# Without this, a host-side `node_modules` is copied into the image. That breaks
+# the dependency layer cache (any lockfile-relevant change re-copies hundreds of
+# megabytes) and risks native modules built for the host platform being used in
+# the image. The container installs its own dependencies from the lockfile, so
+# the host's copy is never wanted.
+
+node_modules
+.next
+out
+build
+coverage
+
+# Local env files must never be baked into an image: everything in
+# `.env*` is NEXT_PUBLIC_* and therefore ends up in the shipped bundle. The
+# committed template is not secret and is re-created from Dockerfile.dev's docs,
+# so it is excluded too — only `.env.example` is documentation, not config.
+.env*
+!.env.example
+
+# Git metadata: the image is not a git checkout, and including it prevents
+# husky's prepare hook from working as intended.
+.git
+.gitignore
+.github
+
+# Editor and OS noise.
+.vscode
+.idea
+*.swp
+.DS_Store
+
+# Local compose overrides and docs are not needed to run the app.
+docker-compose.override.yml
+*.md

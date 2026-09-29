@@ -1,0 +1,58 @@
+# Local development environment.
+#
+# Reproduces CI's toolchain exactly: Node from .nvmrc, npm pinned in
+# Dockerfile.dev. See docs/local-development.md.
+#
+#   docker compose up --build
+#
+# The Node version is read from .nvmrc rather than repeated, so the container and
+# CI cannot drift apart.
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+      args:
+        # The Node version is baked into Dockerfile.dev's FROM. Requiring it here
+        # as an env var would mean `docker compose up` fails on a fresh clone
+        # before the developer has done anything, so it is not required.
+        #
+        # Run as the host user so files written into the bind mount are not
+        # root-owned on the host. Overridable for unusual setups.
+        UID: ${HOST_UID:-1000}
+        GID: ${HOST_GID:-1000}
+    # The working tree is bind-mounted, so edits on the host trigger hot reload
+    # in the container.
+    #
+    # `:cached` is an advisory consistency hint: the mount is shared and changes
+    # are visible immediately, it just lets the host defer flushing when it can.
+    volumes:
+      - .:/app:cached
+      # Keep the container's node_modules off the bind mount. Without this, a
+      # host-side node_modules (possibly built for a different platform or a
+      # different libc) shadows the container's and breaks native modules.
+      - /app/node_modules
+      - /app/.next
+    ports:
+      # 0.0.0.0 so the dev server is reachable from the host browser.
+      - "3000:3000"
+    environment:
+      NODE_ENV: development
+      # File watching has to be polled. inotify events do not cross a bind mount
+      # reliably (and not at all on Docker Desktop's virtiofs/gRPC-FUSE), so
+      # without this hot reload silently does not work — the container runs, the
+      # page never updates, and it looks like a broken setup.
+      #
+      # This costs CPU, which is the trade for working hot reload. Turn it off in
+      # docker-compose.override.yml if you are on Linux with a native filesystem
+      # and want the performance back.
+      CHOKIDAR_USEPOLLING: "true"
+      CHOKIDAR_INTERVAL: "300"
+      WATCHPACK_POLLING: "true"
+      # Next.js writes its build trace to /tmp; keep it inside the container.
+      NEXT_TELEMETRY_DISABLED: "1"
+    # Interactive dev needs a TTY, or `npm run dev` behaves oddly and output is
+    # not coloured.
+    stdin_open: true
+    tty: true

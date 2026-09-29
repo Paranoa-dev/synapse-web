@@ -87,10 +87,29 @@ take over — see `lib/soroban/transactionMerge.ts` and `lib/soroban/useLiveCont
 
 ## Getting started
 
+The Node version is pinned in [`.nvmrc`](.nvmrc) and is the single source of
+truth for local setups, CI, and the development container.
+
+### Native
+
 ```bash
+nvm use        # reads .nvmrc
 npm install
 npm run dev
 ```
+
+### Container
+
+Reproduces CI exactly, with no local toolchain to install:
+
+```bash
+docker compose up --build
+```
+
+Both serve the app on [http://localhost:3000](http://localhost:3000). See
+[docs/local-development.md](docs/local-development.md) for the container's
+settings, why they are needed (hot reload through a bind mount, file ownership),
+and troubleshooting.
 
 Open [http://localhost:3000](http://localhost:3000). The app starts on the
 **dashboard** tab showing mock data. Connect a Freighter or xBull wallet and set

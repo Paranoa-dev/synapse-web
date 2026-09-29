@@ -1,0 +1,66 @@
+# Local development image.
+#
+# Pinned to the exact Node and npm versions CI uses, so a container can never
+# disagree with CI about toolchain versions. That disagreement has caused real
+# breakage here: the lockfile was regenerated to match npm 10.8.2, and jsdom was
+# downgraded for Node 20 compatibility.
+#
+# NODE_VERSION is a build arg so docker-compose.yml and CI share one source of
+# truth. Change it in exactly one place (.nvmrc) and both follow.
+
+FROM node:20-bookworm-slim
+
+# npm is pinned explicitly. The tag `node:20` ships whatever npm was current when
+# the image was built, which drifts; a regenerated lockfile from a different npm
+# is a recurring source of diff noise and CI failures.
+ARG NPM_VERSION=10.8.2
+
+# `git` is needed by husky's prepare hook; `python3`/`make`/`g++` are build
+# dependencies for a few native transitive deps that have no prebuilt binary for
+# every platform.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git python3 make g++ ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN npm install --global "npm@${NPM_VERSION}" \
+    && npm --version \
+    && node --version
+
+# Run as the host user rather than root so files written into the bind mount
+# (the bind mount is the usual source of root-owned files in the working tree)
+# stay owned by the developer. The IDs are overridden by docker-compose.yml.
+ARG UID=1000
+ARG GID=1000
+RUN groupadd --gid ${GID} dev \
+    && useradd --uid ${UID} --gid ${GID} --create-home --shell /bin/bash dev
+
+WORKDIR /app
+
+# Dependencies are installed in their own layer from the lockfile alone, so a
+# source-only change does not invalidate the (slow) install step.
+#
+# `--ignore-scripts` is deliberate: husky's `prepare` hook only matters in a git
+# checkout and fails in a bare copied package.json. The install is re-run with
+# scripts enabled once the source is in place, below.
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts
+
+COPY --chown=${UID}:${GID} . .
+
+# Second install, now with lifecycle scripts, so native dependencies such as
+# sharp and the WASM toolchain fetch their platform binaries. These must NOT be
+# skipped --ignore-scripts, or they break at runtime rather than at install time.
+#
+# HUSKY=0 disables the repo's `prepare` hook: .git is excluded from the build
+# context, so there is no repository for husky to install hooks into. Without
+# this it prints a warning on every `npm install` inside the container.
+USER ${UID}:${GID}
+ENV HUSKY=0
+RUN npm install --no-audit --no-fund
+
+EXPOSE 3000
+
+# Next.js dev server. Bind 0.0.0.0 so the port is reachable from the host
+# through the published port; binding localhost inside the container is the
+# classic reason a working container looks broken from the browser.
+CMD ["npm", "run", "dev"]

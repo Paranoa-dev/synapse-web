@@ -26,6 +26,8 @@ synapse-web/
 │   └── error.tsx / not-found.tsx
 ├── components/
 │   ├── Shell.tsx           # Top-level shell: header, tab bar, footer
+│   ├── command-palette/
+│   │   └── CommandPalette.tsx      # Cmd/Ctrl+K fuzzy-searchable command list
 │   ├── dashboard/
 │   │   ├── DashboardTab.tsx        # Composes the dashboard view
 │   │   ├── StatCards.tsx           # PENDING / PROCESSING / COMPLETED / FAILED counts
@@ -50,6 +52,7 @@ synapse-web/
 │       ├── SorobanTip.tsx
 │       ├── TabErrorBoundary.tsx
 │       └── Toast.tsx
+├── e2e/                  # Playwright specs (smoke + cross-engine runtime)
 ├── lib/
 │   ├── mock-data.ts        # Fallback data: MOCK_TXS + MOCK_CONTRACT_INFO
 │   ├── types.ts            # Transaction, ContractInfo, TxStatus, CallbackPayload
@@ -67,6 +70,16 @@ synapse-web/
 │       ├── transactionMerge.ts   # Merges mock baseline with live events
 │       ├── useLiveTransactions.ts
 │       └── useLiveContractInfo.ts
+├── docs/                   # Source of the published documentation site
+│   ├── index.md
+│   ├── getting-started.md
+│   ├── architecture.md
+│   ├── contract-abi.md      # ABI table injected at build time (no hand copy)
+│   └── contributing.md
+├── scripts/
+│   └── docs/                # Markdown renderer, ABI generator, site builder
+├── e2e/                     # Playwright smoke + runtime tests (PR #174)
+├── playwright.config.ts
 └── public/                 # Static assets
 ```
 
@@ -85,38 +98,292 @@ take over — see `lib/soroban/transactionMerge.ts` and `lib/soroban/useLiveCont
 
 ---
 
+## Runtime Contract Switcher & Multi-Deployment Tracking
+
+The dashboard allows tracking and switching between multiple deployed Soroban contract IDs at runtime (for example, switching between a personal Testnet deployment and a shared staging deployment) without requiring environment changes or frontend rebuilds.
+
+### Features
+- **Contract-Switcher UI**: Integrated directly into the shell header with dropdown navigation, tracked deployments list, active badge indicators, and "+ ADD CONTRACT ID" form.
+- **LocalStorage Persistence**: Contract selections and custom added deployments are persisted across browser reloads via `localStorage` (matching the pattern in `lib/wallet/storage.ts`).
+- **Clean Re-scoping & Zero Stale-Data Leakage**:
+  - Switching contracts tears down the existing `lib/soroban/events.ts` poller and establishes a fresh one scoped to the new contract ID.
+  - Event poller cursors in `localStorage` are scoped per contract ID (`soroban-event-cursor:<contractId>`), ensuring event feeds never collide.
+  - `useLiveTransactions` immediately wipes cached enrichment state and resets fetch registries upon contract switch.
+  - `useLiveContractInfo` immediately wipes previous live health/version state and cancels any pending in-flight read requests.
+  - `AdminTab`, `TransactionsTab`, and `TxDetailModal` automatically route all simulations and contract invocations to the active contract ID.
+
+### Demonstration: Switching Live Between Two Testnet Instances
+1. **Initial Contract A (Shared Testnet)**:
+   - Select or configure Contract A: `CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC`.
+   - The contract info panel reflects Contract A's address and simulated `health()`/`version()`.
+   - Live events from Contract A are streamed into the pipeline and transaction tables.
+2. **Switching to Contract B (Personal Testnet)**:
+   - Click the **CONTRACT: ...** switcher in the header.
+   - Click **+ ADD CONTRACT ID** and enter Contract B: `CA3D5KRYMCMCZKPO722ECQQQ3QHOFGT2TJNITW5OECVOAQCEK7ALISVN` with label `Personal Testnet`.
+   - Click **Save & Switch**.
+   - Contract A's event poller is torn down and stopped immediately.
+   - All displayed events and enriched transaction state from Contract A are flushed to avoid stale leakage.
+   - Poller for Contract B connects with its own scoped cursor and starts polling Contract B.
+   - Contract info panel switches to Contract B, resetting old fields and re-fetching `health()` and `version()` for Contract B.
+   - Your selection is remembered in `localStorage` on page reload.
+
+---
+
 ## Getting started
 
+**Requires Node `20.20.2` and npm `10.8.2` — exactly.** Those are the versions the
+build is pinned to; CI runs nothing else, and `npm ci` with a different npm produces
+a different tree.
+
+The pin lives in `package.json` → `engines` and is mirrored in `.nvmrc`. With
+[`nvm`](https://github.com/nvm-sh/nvm):
+
 ```bash
-npm install
+nvm install     # reads .nvmrc
+nvm use
+node --version  # v20.20.2
+npm --version   # 10.8.2
+```
+
+Then:
+
+```bash
+npm ci
 npm run dev
 ```
 
+`npm ci` rather than `npm install`: it installs exactly what `package-lock.json`
+pins and never rewrites the lockfile, which is what makes a local build match CI.
+
+If your version is wrong the toolchain check tells you so immediately, rather than
+letting it surface later as a confusing build error:
+
+```bash
+npm run check:toolchain
+```
+
+Upgrading the pinned version means changing `package.json` → `engines` and `.nvmrc`
+together (the check fails if they disagree), then running `npm install` with the new
+npm to regenerate `package-lock.json` and committing that too.
+
+### The Docker dev environment uses the same pin
+
+`npm run check:toolchain` also verifies any `Dockerfile` in the repository pins the
+same Node (`FROM node:20.20.2`), so the container dev environment cannot quietly run
+a different Node from CI. Until a Dockerfile exists the check reports a skip; when
+one is added, a mismatch fails immediately.
+
 Open [http://localhost:3000](http://localhost:3000). The app starts on the
-**dashboard** tab showing mock data. Connect a Freighter or xBull wallet and set
-`NEXT_PUBLIC_CONTRACT_ID` (plus optionally `NEXT_PUBLIC_SOROBAN_RPC_URL`) to switch
-to live contract data instead.
+**dashboard** tab. Connect a Freighter or xBull wallet and use the runtime **CONTRACT** switcher in the header (or configure `NEXT_PUBLIC_CONTRACT_ID` / `NEXT_PUBLIC_SOROBAN_RPC_URL` in `.env.local`) to interact with live Testnet contracts.
 
 Other scripts:
 
 ```bash
-npm run build        # Production build
-npm run lint         # ESLint
-npm run test         # Run the test suite once
-npm run test:watch   # Run the test suite in watch mode
-npm run format       # Prettier (writes)
-npm run format:check # Prettier (CI check)
-npx tsc --noEmit     # Type-check without emitting
+npm run build            # Production build
+npm run lint             # ESLint
+npm run typecheck        # tsc --noEmit
+npm run test             # Run the test suite once
+npm run test:unit        # Unit tests only (what the pre-push hook runs)
+npm run test:watch       # Run the test suite in watch mode
+npm run check:toolchain  # Assert Node/npm match the pin in package.json
+npm run e2e:install      # One-time: download the Playwright browsers
+npm run e2e              # Playwright suite (all three engines)
+npm run format           # Prettier (writes)
+npm run format:check     # Prettier (CI check)
 ```
+
+### Flaky tests
+
+`npm test` retries a failing test up to twice before giving up, so one unlucky
+run does not block unrelated work. A test that is still red after the last
+attempt fails the build exactly as it always did. A test that only goes green on
+a retry does not — it is reported in its own section and annotated on the PR as
+a warning, because it is a real bug sitting behind a retry.
+
+Every retry is recorded. A nightly job folds them into a rolling per-test flake
+rate, and a test that keeps needing retries has to either be fixed or carry a
+quarantine entry with a named owner, a tracking issue and an expiry date. There
+is no way to make a quarantine permanent, so "we will fix it later" has to be
+re-argued on a schedule.
+
+```bash
+FLAKE_RETRY=0 npm test                 # No retries: the real first-attempt pass rate
+npm run test:flake-history             # Fold the last run in and report offenders
+npm run test:flake-history -- --enforce # Exit non-zero on an unquarantined offender
+```
+
+Full details, including when to quarantine rather than fix, are in
+[`docs/testing/QUARANTINE.md`](docs/testing/QUARANTINE.md).
+
+### Lighthouse reports
+
+`lighthouserc.js` + `.github/workflows/lighthouse.yml` audit all four tab routes
+on every PR and post a browsable per-route report as a workflow artifact, with
+deltas against the merge base. Locally, against a running dev server:
+
+```bash
+npx @lhci/cli@0.14.0 autorun --config=lighthouserc.js
+node scripts/lighthouse-report.mjs .lighthouseci/manifest.json "" .lighthouseci/report
+```
+
+---
+
+## Testing
+
+Two suites, two runners, two jobs:
+
+| Suite          | Runner         | Where                                | Scope                                                                         |
+| -------------- | -------------- | ------------------------------------ | ----------------------------------------------------------------------------- |
+| `npm run test` | Vitest + jsdom | `*.test.ts(x)` next to their modules | Logic and component behaviour. Node 20 **and** 22 in CI.                      |
+| `npm run e2e`  | Playwright     | `e2e/*.spec.ts`                      | Does the built app boot and render in each engine? Chromium, Firefox, WebKit. |
+
+`e2e/` is excluded from Vitest's `include` globs (see `vitest.config.ts`) — both
+runners default to `*.spec.ts`, so without that exclusion the Playwright suite
+would be collected by `npm run test` and fail on a missing runner.
+
+`playwright.config.ts` defines the browser matrix as Playwright `projects`. A
+local `npm run e2e` runs all three; CI runs one project per matrix leg
+(`npx playwright test --project=<engine>`) so a failure is attributable to a
+specific engine.
+
+The e2e suite builds and starts the production app (`next build && next start`)
+rather than the dev server, so it exercises what actually ships. That build is
+the dominant cost of the suite — budget ~1 minute of setup per run.
+
+The pinned build/publish path stays on Node 20; only the _test_ job is matrixed
+across Node versions. See `.github/workflows/ci.yml` for the reasoning.
+
+```bash
+npm run build            # Production build
+npm run lint             # ESLint
+npm run typecheck        # tsc --noEmit
+npm run test             # Run the test suite once
+npm run test:unit        # Unit tests only (what the pre-push hook runs)
+npm run test:watch       # Run the test suite in watch mode
+npm run check:toolchain  # Assert Node/npm match the pin in package.json
+npm run e2e:install      # One-time: download the Playwright browsers
+npm run e2e              # Playwright suite (all three engines)
+npm run format           # Prettier (writes)
+npm run format:check     # Prettier (CI check)
+```
+
+---
+
+## Documentation
+
+The reference documentation lives in [`docs/`](./docs) and is published as a
+static site by `.github/workflows/docs.yml`:
+
+<https://synapse-bridgez.github.io/synapse-web>
+
+```bash
+npm run docs:build   # docs/*.md -> docs-dist/
+npm run docs:dev     # build, then serve on http://localhost:4173
+```
+
+To build for a different mount point, pass `--base` and `--site`:
+
+```bash
+npm run docs:build -- --base /synapse-web/ --site https://example.github.io
+```
+
+`docs/contract-abi.md` contains a `<!-- generated:abi-reference -->`
+anchor. The build replaces it with a table generated from `ABI_ENDPOINTS` in
+`lib/constants.ts`, so the published reference cannot drift from the endpoints
+the app actually calls. Adding an endpoint to `ABI_ENDPOINTS` and rebuilding is
+all that is required — do not paste a table into the Markdown by hand; the build
+fails if the anchor or its `generated: abi-reference` front matter is removed.
+
+There is no SSG or Markdown dependency here. `scripts/docs/` is a small
+renderer, generator, and static server built on Node's standard library, so the
+docs build cannot break the app's dependency tree or its CI runtime.
+
+---
+
+## Adding a new tab
+
+1. Create `components/<name>/<NameTab.tsx>` and export a `<NameTab />` component.
+2. Add the tab key to the `TABS` array in `lib/tabs.ts`.
+3. Add a matching `{tab === "<name>" && <NameTab />}` render block in `Shell.tsx`.
+4. Wrap it in `<TabErrorBoundary>` like the existing tabs.
+
+`lib/tabs.ts` is the single source of truth: the `/[tab]` route segment
+prerenders one static page per entry, and `lighthouserc.js` audits the same
+list. `lib/tabs.test.ts` fails CI if the t
+
+---
+
+## Security headers & CSP
+
+Every route is served with a strict `Content-Security-Policy` plus
+`X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`,
+`Permissions-Policy`, and `Strict-Transport-Security` (production only). The
+policy is owned and documented in `lib/security/csp.ts` and applied from
+`next.config.ts` — see `next.config.ts:13`.
+
+Two things matter for operators:
+
+**The RPC endpoint is build-time.** `connect-src` always allows the origin of
+`NEXT_PUBLIC_SOROBAN_RPC_URL` (or the testnet default) plus anything in
+`NEXT_PUBLIC_CSP_CONNECT_SRC` (comma-separated origins). Changing the RPC
+requires a redeploy, because the header is baked at build time. The policy
+_never_ falls back to `connect-src *`; a bad allowlist entry fails the build
+instead of producing a policy that silently blocks the app or opens it up.
+
+**Runtime user-supplied RPCs.** If a deployment lets users type an RPC endpoint
+at runtime, no static header can know it in advance. Set
+`NEXT_PUBLIC_CSP_ALLOW_ANY_HTTPS=1` to allow any `https:` origin in
+`connect-src` — still no plaintext HTTP, no `ws:`, and no `data:`. The
+long-term fix is a server-side RPC proxy so `connect-src` can stay `'self'`.
+
+Both exceptions the policy keeps — `script-src 'unsafe-inline'` (Next's static
+hydration needs it; doing better requires nonces, which force dynamic
+rendering) and `style-src 'unsafe-inline'` (React inline styles) — are
+documented in `lib/security/csp.ts` rather than left implicit. `script-src-attr
+'none'` blocks inline event handlers, and there is no `'unsafe-eval'` anywhere.
+
+Wallet extensions do not appear in `connect-src` by design: Freighter and xBull
+are reached via `window.postMessage` and extension-injected APIs, not `fetch`,
+so no extension origin is a connect target an injected script could exfiltrate
+to. If a future wallet module needs an iframe or a `fetch` call, that must be a
+reviewed, explicit policy change — see `lib/security/csp.ts`.
 
 ---
 
 ## Adding a new tab
 
 1. Create `components/<name>/<Name>Tab.tsx` and export a `<NameTab />` component.
-2. Add the tab key to the `TABS` array in `components/Shell.tsx`.
+2. Add the tab key to the `TABS` array in `lib/tabs.ts`.
 3. Add a matching `{tab === "<name>" && <NameTab />}` render block in `Shell.tsx`.
 4. Wrap it in `<TabErrorBoundary>` like the existing tabs.
+
+`lib/tabs.ts` is the single source of truth: the `/[tab]` route segment
+prerenders one static page per entry, and `lighthouserc.js` audits the same
+list. `lib/tabs.test.ts` fails CI if the two ever disagree, so a new tab cannot
+ship without being added to the Lighthouse route list.
+
+Each tab is a real URL — `/dashboard`, `/transactions`, `/admin`, `/docs` — so it
+can be linked, bookmarked, and restored on reload. `/` stays canonical for the
+dashboard.
+
+---
+
+## Deploy rollback automation
+
+`.github/workflows/rollback.yml` rolls production back to the last known-good build
+when health signals (error rate, synthetic-monitoring failures) breach configured
+thresholds inside the observation window of a new deploy. Rolling back is "serve the
+previous build" — the app is stateless, so there is no data migration to unwind.
+
+Thresholds, hooks and the manual force/prevent overrides are all configuration, not
+code. See **[docs/rollback.md](docs/rollback.md)** for the full contract: which
+repository variables and secrets to set, the health-signal payload shape, how to wire
+the deploy pipeline's `deploy_completed` dispatch, and the anti-flap circuit breaker
+that stops rollback/re-promote loops.
+
+The decision logic itself lives in `scripts/deploy/rollback-policy.mjs` and is
+covered by `scripts/deploy/rollback-policy.test.ts`, so it is testable without a
+deploy platform.
 
 ---
 
@@ -135,6 +402,8 @@ Notable milestones on the path to a working testnet client:
       `useLiveContractInfo`), falling back to mock data when no wallet/contract is configured
 - [x] Integrate `@creit.tech/stellar-wallets-kit` (Freighter / xBull) for wallet connection
       (`lib/wallet/`)
+- [x] Command palette (`Cmd/Ctrl+K`) for tab navigation, key actions, and settings toggles
+      (`components/command-palette/CommandPalette.tsx`)
 - [ ] Backend relay service for `register_transaction`, `start_processing`, `complete_transaction`,
       `fail_transaction`, and `register_callback` webhooks
 - [ ] Fetch `admin` / `relay_signer` from the deployed contract once it exposes a getter for them
@@ -144,13 +413,13 @@ Notable milestones on the path to a working testnet client:
 
 ## Tech stack
 
-|                |                                                  |
-| -------------- | ------------------------------------------------ |
-| Framework      | Next.js 16 (App Router)                          |
-| UI             | React 19, inline styles + Tailwind CSS v4        |
-| Font           | IBM Plex Mono                                    |
-| Language       | TypeScript 5                                     |
-| Linting        | ESLint + Prettier + Husky pre-commit             |
-| Testing        | Vitest + Testing Library                         |
-| CI             | GitHub Actions (lint → typecheck → test → build) |
-| Target network | Stellar Testnet (Soroban)                        |
+|                |                                                                      |
+| -------------- | -------------------------------------------------------------------- |
+| Framework      | Next.js 16 (App Router)                                              |
+| UI             | React 19, inline styles + Tailwind CSS v4                            |
+| Font           | IBM Plex Mono                                                        |
+| Language       | TypeScript 5                                                         |
+| Linting        | ESLint + Prettier + Husky pre-commit / pre-push                      |
+| Testing        | Vitest + Testing Library (unit), Playwright (E2E)                    |
+| CI             | GitHub Actions — Node 20/22 test matrix, Chromium/Firefox/WebKit E2E |
+| Target network | Stellar Testnet (Soroban)                                            |
